@@ -5,9 +5,11 @@ use std::path::{
     Path,
     PathBuf
 };
+use std::ops::Deref;
 use std::vec::Vec;
 use std::{collections::HashMap, env};
 use clap::Parser;
+use derive_more::{Deref, DerefMut};
 
 #[derive(Parser)]
 #[command(name = "ITGBA")]
@@ -59,7 +61,7 @@ fn main() {
     }
 
     let mut pixels = image.pixels();
-    let mut color_palette: [Rgb<u8>; 4];
+    let mut color_palette: ColorPalette;
 
     unsafe {
         color_palette = std::mem::uninitialized();
@@ -80,30 +82,10 @@ fn main() {
                 continue;
             }
 
-            let mut tile_data: Tiledata;
-            unsafe {
-                tile_data = std::mem::uninitialized();
-            }
 
-            // Iterate over every pixel of the tile
-            for x in 0..8 {
-                for y in 0..8 {
-                    tile_data.0[y * 8 + x] = 'l: {
-                        // Determine palette index
-                        let cur_pixel_x: u32 = tile_x * 8 + x as u32;
-                        let cur_pixel_y: u32 = tile_y * 8 + y as u32;
-                        let cur_pixel = *image.get_pixel(cur_pixel_x, cur_pixel_y);
-                        for i in 0..4 {
-                            if (color_palette[i] == cur_pixel) {
-                                break 'l i as u8; //return palette index
-                            }
-                        }
-                        panic!("Data tiles in image contain other colors than the palette (Error at pixel coordinates: ({},{})", cur_pixel_x, cur_pixel_y);
-                    };
-                }
-            }
-
-            tile_data_vec.push(tile_data);
+            tile_data_vec.push(
+                read_tile_from_image(tile_x, tile_y, &image, &color_palette)
+            );
         }
     }
 
@@ -163,7 +145,97 @@ fn main() {
     
     std::fs::write(output_file_path, resulting_file_contents);
 
+    // Set up a hashmap that contains every version of a tile (original, x-flipped, y-flipped, x-flipped+y-flipped)
+    let mut all_versions_of_reference_tiles: HashMap<Tiledata, FlipAttributes> = HashMap::new();
+    for tile_data in tile_data_vec {
+
+        for x_flip in 0..2 {
+            for y_flip in 0..2 {
+
+                if(x_flip == 0) && (y_flip==0) {continue;}
+                    
+                let mut modified_tile_data: Tiledata;
+                unsafe { modified_tile_data = std::mem::uninitialized();} 
+                
+                // Populate new tiledata
+                for x in 0..8 { 
+                    for y in 0..8 {
+                        let new_x = x_flip * (7-x) + (1-x_flip) * x;
+                        let new_y = y_flip * (7-y) + (1-y_flip) * y;
+
+                        modified_tile_data.assign(new_x, new_y, tile_data.get(x,y));
+                    }
+                }
+
+                all_versions_of_reference_tiles.insert(modified_tile_data, FlipAttributes {
+                    x_flip: x_flip !=0,
+                    y_flip: y_flip != 0
+                });
+
+            }
+        }
+
+        // Insert original tile
+        all_versions_of_reference_tiles.insert(tile_data, FlipAttributes {
+            x_flip: false,
+            y_flip: false,
+        });
+
+    }
+
+
+
+    //	7	        6	    5	        4	    3	    210
+    //	Priority	Y flip	X flip		/       Bank	Color palette
 
 }
 
+
+fn read_tile_from_image(tile_index_x: u32, tile_index_y: u32, image: &image::RgbImage, color_palette: &ColorPalette) -> Tiledata {
+    let mut tile_data: Tiledata;
+    unsafe {
+        tile_data = std::mem::uninitialized();
+    }
+
+    // Iterate over every pixel of the tile
+    for x in 0..8 {
+        for y in 0..8 {
+            let palette_index: u8 =  'l: {
+                // Determine palette index
+                let cur_pixel_x: u32 = tile_index_x * 8 + x as u32;
+                let cur_pixel_y: u32 = tile_index_y * 8 + y as u32;
+                let cur_pixel = *image.get_pixel(cur_pixel_x, cur_pixel_y);
+                for i in 0..4 {
+                    if (color_palette[i] == cur_pixel) {
+                        break 'l i as u8; //return palette index
+                    }
+                }
+                panic!("Data tiles in image contain other colors than the palette (Error at pixel coordinates: ({},{})", cur_pixel_x, cur_pixel_y);
+            };
+            tile_data.assign(x,y,palette_index);
+        }
+    }
+
+    return tile_data;
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct Tiledata([u8; 64]);
+
+
+#[derive(Deref, DerefMut)]
+struct ColorPalette([Rgb<u8>; 4]);
+
+impl Tiledata {
+    fn assign(&mut self, x: u8,y: u8, palette_index: u8) {
+        self.0[(y*8 + x) as usize] = palette_index;
+    }
+    fn get(&self, x: u8,y: u8) -> u8 {
+        self.0[(y*8 + x) as usize]
+    }
+}
+
+struct FlipAttributes {
+    x_flip: bool,
+    y_flip: bool,
+}
