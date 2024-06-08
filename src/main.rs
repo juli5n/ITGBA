@@ -1,13 +1,14 @@
 #![allow(warnings)]
-#![feature(path_file_prefix)]
+#![feature(path_file_prefix, generic_const_exprs)]
 use image::{DynamicImage, Rgb};
 use std::path::{
     Path,
     PathBuf
 };
 use std::ops::Deref;
+use std::thread::current;
 use std::vec::Vec;
-use std::{collections::HashMap, env};
+use std::{collections::{HashMap, LinkedList}, env};
 use clap::Parser;
 use derive_more::{Deref, DerefMut};
 
@@ -65,41 +66,27 @@ fn main() {
     let mut parse_result = Cl_parser::parse();
 
 
-    println!("use_hex: {:?}", parse_result.use_hex);
-
-
-    
-    let image: DynamicImage = image::open(
-            parse_result.reference_tileset_path.clone()
-    )
-    .expect(format!("Can't open reference-tileset-path: {}", parse_result.reference_tileset_path.as_os_str().to_str().unwrap()).as_str());
-
-    for path_buf in parse_result.map_file_paths.iter() {
-        println!("{}, ", path_buf.as_os_str().to_str().unwrap());
-    }
-
-    // GBC supports a 15-bit RGB (32768) colors (5-bits per channel)
-    // Convert image to closest representation with 8-bits per channel
-    let image: image::RgbImage = image.into_rgb8();
+    let reference_tileset_image: image::RgbImage = rgbimage_from_path(&parse_result.reference_tileset_path);
 
     // Check that the image has valid dimensions
-    if (image.width() % 8 > 0 || image.height() % 8 > 0) {
+    if (reference_tileset_image.width() % 8 > 0 || reference_tileset_image.height() % 8 > 0) {
         panic!("Image dimensions aren't multiples of tile size (8)");
     }
 
-    let image_width_in_tiles = image.width() / 8;
-    let image_height_in_tiles = image.height() / 8;
+    let image_width_in_tiles = reference_tileset_image.width() / 8;
+    let image_height_in_tiles = reference_tileset_image.height() / 8;
+
+    // Sanity check on tilemap size
+    if image_width_in_tiles * image_height_in_tiles -1 > u8::MAX as u32 {
+        panic!("Reference tileset is too big. The map should contain only 256 data tiles apart from the reference tile at maximum.")
+    }
 
     if (image_width_in_tiles * image_height_in_tiles < 2) {
         panic!("Image needs to contain at least 2 tiles: A reference tile for mapping colors to the pallete indices 0-3 and at least one data tile")
     }
 
-    let mut pixels = image.pixels();
-    let mut color_palette: ColorPalette;
-
-    unsafe {
-        color_palette = std::mem::uninitialized();
-    }
+    let mut pixels = reference_tileset_image.pixels();
+    let mut color_palette: ColorPalette = unsafe { std::mem::uninitialized()};
 
     color_palette[0] = *pixels.next().unwrap();
     color_palette[1] = *pixels.next().unwrap();
@@ -108,7 +95,7 @@ fn main() {
 
     let mut tile_data_vec: Vec<Tiledata> = Vec::new();
 
-    // Iterate over the remaining tiles with starting at index (1,0) to (image_width_in_tiles,0), (0,1) and so on...
+    // Iterate over the remaining tiles with starting at index (1,0),(2,0)... (image_width_in_tiles,0), (0,1) and so on...
     for tile_x in 0..image_width_in_tiles {
         for tile_y in 0..image_height_in_tiles {
             // skip tile (0,0)
@@ -118,7 +105,7 @@ fn main() {
 
 
             tile_data_vec.push(
-                read_tile_from_image(tile_x, tile_y, &image, &color_palette)
+                read_tile_from_image(tile_x, tile_y, &reference_tileset_image, &color_palette)
             );
         }
     }
@@ -138,18 +125,18 @@ fn main() {
     for (tile_index, tile_data) in tile_data_vec.iter().enumerate() {
         resulting_file_contents.push_str(format!("\n\t// Tile {}\n", tile_index).as_str());
 
-        for x in 0..8 {
-            if (x  % 2 == 0) {
+        for y in 0..8 {
+            if (y  % 2 == 0) {
                 resulting_file_contents.push_str("\t");
             }
             // write 2 bytes corresponding to the line x
             let mut first_byte: u8 = 0; // stores the least significant bits of the palette indices
             let mut second_byte: u8 = 0; // stores the highest significant bits " 
 
-            for i in 0..8 {
-                let palette_index = tile_data.0[x * 8 + i];
-                first_byte += ((palette_index & 1u8) << 7) >> i;
-                second_byte += (((palette_index & 2u8) >> 1) << 7) >> i;
+            for x in 0..8 {
+                let palette_index = tile_data.get(x,y);
+                first_byte += ((palette_index & 1u8) << 7) >> x;
+                second_byte += (((palette_index & 2u8) >> 1) << 7) >> x;
             }
 
             resulting_file_contents
@@ -158,8 +145,8 @@ fn main() {
                     false => format!("{:#010b}, {:#010b}, ", first_byte, second_byte),
         }.as_str());
 
-            if ((x + 1) % 2 == 0) {
-                resulting_file_contents.push_str(format!(" // Line {}-{}\n", x-1, x).as_str());
+            if ((y + 1) % 2 == 0) {
+                resulting_file_contents.push_str(format!(" // Line {}-{}\n", y-1, y).as_str());
             }
         }
     }
@@ -180,16 +167,16 @@ fn main() {
     std::fs::write(output_file_path, resulting_file_contents);
 
     // Set up a hashmap that contains every version of a tile (original, x-flipped, y-flipped, x-flipped+y-flipped)
-    let mut all_versions_of_reference_tiles: HashMap<Tiledata, FlipAttributes> = HashMap::new();
-    for tile_data in tile_data_vec {
+    let mut tile_searchmap:HashMap<Tiledata, TileSearchmapValue>  = HashMap::new();
+    for (tile_index, tile_data) in tile_data_vec.into_iter().enumerate() {
 
         for x_flip in 0..2 {
             for y_flip in 0..2 {
 
                 if(x_flip == 0) && (y_flip==0) {continue;}
                     
-                let mut modified_tile_data: Tiledata;
-                unsafe { modified_tile_data = std::mem::uninitialized();} 
+                let mut modified_tile_data: Tiledata = unsafe {std::mem::uninitialized()};
+                
                 
                 // Populate new tiledata
                 for x in 0..8 { 
@@ -201,27 +188,40 @@ fn main() {
                     }
                 }
 
-                all_versions_of_reference_tiles.insert(modified_tile_data, FlipAttributes {
+                tile_searchmap.insert(modified_tile_data, TileSearchmapValue {
                     x_flip: x_flip !=0,
-                    y_flip: y_flip != 0
+                    y_flip: y_flip != 0,
+                    tile_index: tile_index as u8,
+                    link: None
                 });
 
             }
         }
 
         // Insert original tile
-        all_versions_of_reference_tiles.insert(tile_data, FlipAttributes {
+        tile_searchmap.insert(tile_data, TileSearchmapValue {
             x_flip: false,
             y_flip: false,
+            tile_index: tile_index as u8,
+            link: None
         });
 
     }
 
 
 
-    //	7	        6	    5	        4	    3	    210
-    //	Priority	Y flip	X flip		/       Bank	Color palette
 
+}
+
+fn rgbimage_from_path(path: &Path) -> image::RgbImage {
+    let image: DynamicImage = image::open(
+            path
+    ).expect(format!("Failed to open the path \"{}\"", path.imm_to_str()).as_str() );
+    
+    // GBC supports a 15-bit RGB (32768) colors (5-bits per channel)
+    // Convert image to closest representation with 8-bits per channel
+    let image: image::RgbImage = image.into_rgb8();
+    return image;
 }
 
 
@@ -253,23 +253,194 @@ fn read_tile_from_image(tile_index_x: u32, tile_index_y: u32, image: &image::Rgb
     return tile_data;
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct Tiledata([u8; 64]);
+fn index_and_attribute_array_from_tilemap_image_path(tilemap_image_path: &Path, color_palette: &ColorPalette, tile_search_map: HashMap<Tiledata, TileSearchmapValue> ,allow_attributes_and_generate_attribute_vector: bool) -> (TileIndexArray, Option<AttributeByteArray>) {
 
+    let tilemap_image = rgbimage_from_path(tilemap_image_path);
+
+    // sanity checks on image dimensions
+    if((tilemap_image.width() % 8) > 0) || ((tilemap_image.height() % 8) > 0) {
+        panic!(
+            "Dimensions of tilemap from the path \"{}\" aren't multiples of 8 (tile size).", tilemap_image_path.imm_to_str()
+        );
+    }
+    let tilemap_width = tilemap_image.width() / 8;
+    let tilemap_height = tilemap_image.height() / 8;
+
+    if (tilemap_width > 32) || (tilemap_height > 32) {
+        panic!(
+            "tilemap from the path \"{}\" is too big (max size: 32x32)", tilemap_image_path.imm_to_str()
+        );
+    }
+
+    let mut tile_index_array: TileIndexArray = unsafe { std::mem::zeroed()};
+
+    let mut attributes_byte_array: Option<AttributeByteArray> = match allow_attributes_and_generate_attribute_vector {
+        true => Some(unsafe {std::mem::uninitialized::<AttributeByteArray>()}),
+        false => None
+    };
+
+    for x in 0..tilemap_width {
+        for y in 0..tilemap_height {
+            let current_tile_tiledata = read_tile_from_image(x,y,&tilemap_image, color_palette);
+            match tile_search_map.get(&current_tile_tiledata) {
+                Some(searchmap_value) => { // found matching tile in search map. Not all matches are allowed though depending on allow_attributes_and_generate_attribute_vector
+                    let mut current_chain_link: &TileSearchmapValue = searchmap_value;
+
+                    loop {
+                        // Decide whether this tile index can and should be used
+                        // This code will prefer unflipped tiles over flipped tiles
+                        if (current_chain_link.is_unflipped() || (allow_attributes_and_generate_attribute_vector && current_chain_link.link.is_none())) { // -> found matching tile
+                            tile_index_array.assign(x,y, current_chain_link.tile_index);
+
+                            if let Some(byte_array) = attributes_byte_array.as_mut() {
+
+                                let mut attribute_byte: u8 = 0;
+                                //	7	        6	    5	        4	    3	    210
+                                //	Priority	Y flip	X flip		/       Bank	Color palette
+                                attribute_byte += (current_chain_link.x_flip as u8) << 5;
+                                attribute_byte += (current_chain_link.y_flip as u8) << 6;
+
+                                byte_array.assign(x,y, attribute_byte);
+                            }
+                        } else if let Some(link) =  searchmap_value.link.as_ref() {
+                            current_chain_link = &link; 
+                        } else {
+                            panic!("tilemap from path \"{}\" contains a flipped tile from the reference tileset without an exact match. Only the GBC allows for flipped tiles
+                            via an additional attribute byte tilemap space in VRAM. Consider using the -gbc_map_with_attributes parameter instead to generate an 
+                            attribute array in addition to the index array and allow for flipped tiles", tilemap_image_path.imm_to_str());
+                        }
+                    }
+                },
+                None => {
+                    panic!(
+                        "tilemap from the path \"{}\" contains an unrecognized tile, that is not contained in the reference tileset, at tile index: ({},{})", tilemap_image_path.imm_to_str(), x,y 
+                    );
+                }
+            }
+        }
+    } 
+
+    return (tile_index_array, attributes_byte_array);
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Deref, DerefMut)]
+struct Tiledata(Array2d<u8,8,8>);
+
+trait ImmediateToStr {
+    fn imm_to_str(&self) -> &str;
+}
+
+impl ImmediateToStr for Path {
+    fn imm_to_str(&self) -> &str {
+        self.as_os_str().to_str().unwrap()
+    }
+}
 
 #[derive(Deref, DerefMut)]
 struct ColorPalette([Rgb<u8>; 4]);
 
-impl Tiledata {
-    fn assign(&mut self, x: u8,y: u8, palette_index: u8) {
-        self.0[(y*8 + x) as usize] = palette_index;
+#[derive(Deref, DerefMut)]
+struct TileIndexArray(Array2d<u8,32,32>);
+
+/* 
+#[derive(Deref, DerefMut)]
+struct ByteArray_32x32([u8; 32*32]);
+
+impl ByteArray_32x32 {
+    fn new() -> Self {
+        ByteArray_32x32([0;32*32])
     }
-    fn get(&self, x: u8,y: u8) -> u8 {
-        self.0[(y*8 + x) as usize]
+    fn assign<T>(&mut self, tile_x: T, tile_y: T, value: u8) where T: TryInto<usize> {
+        let Ok(tile_x)= tile_x.try_into() else {panic!()};
+        let Ok(tile_y)= tile_y.try_into() else {panic!()};
+
+        if (!(0..32).contains(&tile_x)) || (!(0..32).contains(&tile_y)) {
+            panic!();
+        }
+        self[tile_y * 32 + tile_x] = value;
+    }
+    fn get<T>(&self, tile_x: T, tile_y: T) -> u8 where T: TryInto<usize>{
+        let Ok(tile_x)= tile_x.try_into() else {panic!()};
+        let Ok(tile_y)= tile_y.try_into() else {panic!()};
+
+        if (!(0..32).contains(&tile_x)) || (!(0..32).contains(&tile_y)) {
+            panic!();
+        }
+        self[tile_y * 32 + tile_x] 
+    }
+    fn boundary_check(tile_x: usize, tile_y: usize) {
+
+    }
+}
+*/
+
+#[derive(Deref, DerefMut, Copy, Clone, PartialEq, Eq, Hash)]
+struct Array2d<T,const rows: usize, const colummns: usize>([[T; colummns]; rows]) where T: std::default::Default + std::marker::Copy;
+
+impl<T, const rows: usize, const colummns: usize> Array2d<T,rows,colummns> where T:std::default::Default + std::marker::Copy{
+    fn new() -> Self {
+        Array2d([[T::default(); colummns]; rows])
+    }
+    fn assign<I>(&mut self, colummn_index : I, row_index: I, value: T) where I: TryInto<usize> {
+        let Ok(x)= colummn_index.try_into() else {panic!()};
+        let Ok(y)= row_index.try_into() else {panic!()};
+
+        Self::boundary_check(x,y);
+
+        self[y][x] = value;
+    }
+    fn get<I>(&self, colummn_index : I, row_index: I) -> T where I: TryInto<usize> {
+        let Ok(x)= colummn_index.try_into() else {panic!()};
+        let Ok(y)= row_index.try_into() else {panic!()};
+
+        Self::boundary_check(x,y);
+
+        self[y][x]
+    }
+    fn boundary_check(colummn_index: usize, row_index: usize) {
+        if (!(0..colummns).contains(&colummn_index)) || (!(0..rows).contains(&row_index)) {
+            panic!();
+        }
+
     }
 }
 
-struct FlipAttributes {
+#[derive(Deref, DerefMut)]
+struct AttributeByteArray(Array2d<u8, 32,32>);
+
+/* 
+impl Tiledata {
+    fn assign<T>(&mut self, x: T, y: T, palette_index: u8) where T: TryInto<usize> {
+        let Ok(x)= x.try_into() else {panic!()};
+        let Ok(y)= y.try_into() else {panic!()};
+        self[(y*8 + x) as usize] = palette_index;
+    }
+    fn boundary_check(x: usize, y: usize) {
+
+    }
+    fn get<T>(&self, x: T, y: T) -> u8 where T: TryInto<usize> {
+        let Ok(x)= x.try_into() else {panic!()};
+        let Ok(y)= y.try_into() else {panic!()};
+        self[(y*8 + x) as usize]
+    }
+}*/
+
+struct TileSearchmapValue {
     x_flip: bool,
     y_flip: bool,
+    tile_index: u8,
+    link: Option<Box<TileSearchmapValue>>
 }
+
+impl TileSearchmapValue {
+    fn is_unflipped(&self) -> bool {
+        (!self.x_flip) && (!self.y_flip)
+    }
+}
+
+
+#[derive(Deref, DerefMut)]
+struct TileSearchmap(HashMap<Tiledata, TileSearchmapValue>);
+
+
+
