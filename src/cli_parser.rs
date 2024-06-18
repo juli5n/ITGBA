@@ -27,14 +27,19 @@ pub struct Cli_parser {
     #[arg(long = "mwa", long = "gbc_map_with_attributes", value_name = "path_list", num_args=1..)]
     pub map_with_attributes_file_paths: Vec<PathBuf>,
 
-    /// The first tile of the supplied image should contain the 4 colors used
+    /// Supply the tileset either via a directory that contains a separate image for each 8x8 tile
+    /// or via a single image that contains all of the tiles. In the former case, a directory path should
+    /// be supplied and the tiles will be ordered lexicographically (in addition to the assigned tile id,
+    /// the generated file will contain constants named by the individual file names to make addressing them
+    /// easier).
+    /// The first tile of the supplied image(s) should contain the 4 colors used
     /// in the tileset in the top left corner at pixel indices (0,0) to (3,0).
     /// If a pixel in the rest of the image has the the same color as pixel (x,0), 
-    /// it's palette index will get assigned to x. 
+    /// it's palette index will get assigned to x.
     /// If any map is supplied it should only use tiles from this reference tileset
     /// There is no support for multiple color palettes and this tool
     /// won't convert the supplied colors to GBC's 15-bit RGB colors either (at the moment).
-    #[arg(short = 'r', long = "reference_tileset", value_name = "path", required = true)]
+    #[arg(short = 'r', long = "reference_tileset", value_name = "directory_path or file_path", required = true)]
     pub reference_tileset_path: PathBuf,
 
     /// Use this flag if the generated output file(s) should use hex notation instead of the
@@ -46,4 +51,18 @@ pub struct Cli_parser {
     
     #[arg(short = 'o', long = "output_directory", value_name = "path")]
     pub output_directory: Option<PathBuf>,
+
+    /// Use this flag to indicate whether to mimic relative paths to the input directory 
+    /// in the output directory. For example, the generated file for (INPUT_DIRECTORY)/folder/bar.png
+    /// will end up in (OUTPUT_DIRECTORY)/folder/bar.png. Is turned off by default
+    #[arg(long = "mimic_relative_paths_to_input_directory", value_name = "bool", default_value_t = false)]
+    pub mimic_relative_paths_to_input_directory: bool,
+
+    /// If this option is used, during reading, ITGBA will use (input_directory) as the working directory.
+    /// instead of the CWD (current working directory). During the output/writing phase, ITGBA will use 
+    /// the old CWD again. You probably want to use this option only in conjunction
+    /// with the -mimic_relative_paths_to_input_directory flag
+    #[arg(long = "input_directory", value_name = "path")]
+    pub input_directory: Option<PathBuf>,
+
 }
