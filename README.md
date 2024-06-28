@@ -64,7 +64,7 @@ $ ITGBA --reference_tileset <path>
 ```
 A tileset image could look like this: 
 
-<img src="example_input/example_tileset_edited.png" alt="tileset.png" width="400" image-rendering= pixelated>
+<img src="../readme_media/example_tileset_edited.png" alt="tileset.png" width="400" image-rendering= pixelated>
 
 Tiles are ordered lexicographically by filename (by unicode code point) or
 in case of specifying a single image from left-to-right, top-to-bottom.
