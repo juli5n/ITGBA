@@ -10,7 +10,7 @@ use crate::input_data_representation_types::*;
 
 const ALL_DIGITS_STR: &str = "0123456789";
 const CXX_VALID_IDENTIFIER_CHARACTERS: &str = "0123456789abcdefghijklmnopqrstuvwyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-pub const IGNORE_PREFIX: &str = "_ignore";
+pub const IGNORE_PREFIX: &str = "__ignore";
 
 
 #[derive(Deref, DerefMut)]

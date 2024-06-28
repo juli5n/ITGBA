@@ -31,7 +31,7 @@ pub struct Cli_parser {
     /// or via a single image that contains all of the tiles. In the former case, a directory path should
     /// be supplied and the tiles will be ordered lexicographically (in addition to the assigned tile id,
     /// the generated file will contain constants named by the individual file names to make addressing them
-    /// easier).
+    /// easier if the file names are valid c identifiers and aren't preceeded by the ignore prefix __ignore).
     /// The first tile of the supplied image(s) should contain the 4 colors used
     /// in the tileset in the top left corner at pixel indices (0,0) to (3,0).
     /// If a pixel in the rest of the image has the the same color as pixel (x,0), 
