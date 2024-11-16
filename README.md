@@ -1,8 +1,19 @@
+# DISCLAIMER:
+I kind of forgot about this project and as silly as that may be, although I have written this in june this year and believe it to be working fine, I still haven't tested it by using it in an actual (gbdk) project, i.e. i'm not sure if the output format is the one people are actually looking for...
+
+
 # ITGBA - ImageToGameboyAsset
 
-A command line tool to help convert image data to a gameboy compatible format useful for gameboy games. At the moment ITGBA only generates .c files.
+A command line tool to help convert image data to format(s) that are useful for developing gameboy games. At the moment ITGBA only generates .c files.
 
 ## Download
+As ITGBA is by no means finished yet, there will be no release on github yet. But I will
+try to keep the main branch in a working state. You can either clone the repository
+and build the project yourself using [cargo](https://www.rust-lang.org/tools/install) or you can directly build and install it using [`cargo install`](https://www.rust-lang.org/tools/install):
+
+```
+cargo install --git https://github.com/juli5n/ITGBA.git
+```
 
 
 ## Example usage
@@ -87,12 +98,14 @@ an existing file hierarchy in the (INPUT_DIRECTORY) can be preserved via the
 
 For more usage info run `ITGBA --help`.
 
-## Features
 
+## Contribution 
+Contributions will be (/are) very welcome, also feel free to ask for
+features without contributing any code! However, note that that I haven`t choosen
+a license yet, so you might wanna hold off with any contributions. I'll probably choose a fairly
+permissive open source license, so don't worry too much about trying this
+project out or opening a PR anyways, if your comfortable with these kinds of
+licenses ;)
 
-
-## Building
-
-## Contribution
-
-## License
+## License(TODO)
+Sorry about the inconvenience, haven't choosen a license yet
